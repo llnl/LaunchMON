@@ -104,7 +104,7 @@ launchmon_base_t<SDBG_DEFAULT_TEMPLPARAM>
   FE_sockfd = rhs.FE_sockfd;
   API_mode = rhs.API_mode;
   last_seen = rhs.last_seen;
-  warm_period = rhs.iwarm_period;
+  warm_period = rhs.warm_period;
   //
   // This should actually never be called
   //
