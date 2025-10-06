@@ -179,7 +179,7 @@ template <BASE_IMAGE_TEMPLATELIST>
 image_base_t<BASE_IMAGE_TEMPLPARAM>::image_base_t(
     const image_base_t<BASE_IMAGE_TEMPLPARAM> &im) {
   base_image_name = im.base_image_name;
-  path = im.base_path_name;
+  path = im.base_image_name;
   //
   // We are not copying linkage_symtab and debug_symtab
   // because of our use of std::map.
