@@ -40,7 +40,7 @@ flux -h > /dev/null 2>&1 || die "flux is not in your path"
 
 FLUX_RANK_SET=$(flux jobs -no {ranks} ${FLUX_HELPER_JOBID})
 
-flux exec -r ${FLUX_RANK_SET} "${@}"
+flux exec -r "${FLUX_RANK_SET}" "${@}"
 
 #
 # vi:tabstop=4 shiftwidth=4 expandtab
