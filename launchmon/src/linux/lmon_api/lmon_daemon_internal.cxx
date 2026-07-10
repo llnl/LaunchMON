@@ -101,6 +101,14 @@ static int ICCL_size = -1;
 static int ICCL_global_id = -1;
 static per_be_data_t *bedataPtr = NULL;
 
+static bool lmon_addr_is_loopback(struct in_addr addr) {
+  return ((ntohl(addr.s_addr) >> 24) == 127);
+}
+
+static bool lmon_addr_is_linklocal(struct in_addr addr) {
+  return ((ntohl(addr.s_addr) & 0xffff0000U) == 0xa9fe0000U);
+}
+
 //////////////////////////////////////////////////////////////////////////////////
 //
 // LAUNCHMON BACKEND INTERNAL INTERFACE
@@ -860,9 +868,31 @@ lmon_rc_e LMON_daemon_gethostname(bool bgion, char *my_hostname, int hlen,
     std::string my_hostnameStr(my_hostname);
     std::string notAvail("na");
     std::string my_ipStr(notAvail);
+    struct in_addr preferred_addr;
+    bool have_preferred_addr = false;
+    bool have_fallback_addr = false;
 
     aliases.push_back(my_hostnameStr);
-    if (inet_ntop(hent->h_addrtype, hent->h_addr, my_ip, ilen) != NULL) {
+    size_t hostnameDot = my_hostnameStr.find('.');
+    if (hostnameDot != std::string::npos && hostnameDot > 0) {
+      aliases.push_back(my_hostnameStr.substr(0, hostnameDot));
+    }
+    for (i = 0; hent->h_addr_list[i] != NULL; i++) {
+      struct in_addr candidate =
+          *((struct in_addr *)hent->h_addr_list[i]);
+      if (!have_fallback_addr) {
+        preferred_addr = candidate;
+        have_fallback_addr = true;
+      }
+      if (!lmon_addr_is_loopback(candidate) &&
+          !lmon_addr_is_linklocal(candidate)) {
+        preferred_addr = candidate;
+        have_preferred_addr = true;
+        break;
+      }
+    }
+    if ((have_preferred_addr || have_fallback_addr) &&
+        inet_ntop(hent->h_addrtype, &preferred_addr, my_ip, ilen) != NULL) {
       my_ipStr = my_ip;
       aliases.push_back(my_ipStr);
     }
