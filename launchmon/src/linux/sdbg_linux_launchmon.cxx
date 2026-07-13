@@ -227,6 +227,87 @@ static T_VA get_va_from_procfs(pid_t pid, const std::string &dynname) {
   return ret_pc;
 }
 
+// Return the runtime load bias for a PIE main executable.
+static T_VA get_exec_base_from_procfs(pid_t pid, const std::string &image_path,
+                                      const std::string &image_name) {
+  using namespace std;
+
+  FILE *fptr = NULL;
+  char mapfile[PATH_MAX];
+  char aline[MAX_STRING_SIZE];
+  T_VA ret_pc = T_UNINIT_HEX;
+
+  sprintf(mapfile, "/proc/%d/maps", pid);
+
+  if ((fptr = fopen(mapfile, "r")) == NULL) return ret_pc;
+
+  while (fgets(aline, MAX_STRING_SIZE, fptr)) {
+    unsigned long start = 0;
+    unsigned long offset = 0;
+    char mapped_path[PATH_MAX] = {0};
+
+    // Parse /proc/<pid>/maps: start-end perms offset dev inode pathname.
+    int fields = sscanf(aline, "%lx-%*[^ ] %*s %lx %*s %*s %4095s",
+                        &start, &offset, mapped_path);
+    if (fields != 3) continue;
+
+    bool path_matches = (image_path == mapped_path);
+    if (!path_matches) {
+      char mapped_copy[PATH_MAX];
+      strncpy(mapped_copy, mapped_path, PATH_MAX);
+      mapped_copy[PATH_MAX - 1] = '\0';
+      path_matches = (image_name == basename(mapped_copy));
+    }
+
+    if (path_matches) {
+      ret_pc = (T_VA)(start - offset);
+      break;
+    }
+  }
+
+  fclose(fptr);
+
+  return ret_pc;
+}
+
+// ET_DYN launchers, such as Ubuntu's PIE srun, need runtime relocation.
+static bool is_position_independent_executable(const std::string &path) {
+  if (path == SYMTAB_UNINIT_STRING) return false;
+
+  FILE *fptr = fopen(path.c_str(), "rb");
+  if (fptr == NULL) return false;
+
+#if BIT64
+  Elf64_Ehdr ehdr;
+#else
+  Elf32_Ehdr ehdr;
+#endif
+
+  bool is_pie = fread(&ehdr, sizeof(ehdr), 1, fptr) == 1 &&
+                memcmp(ehdr.e_ident, ELFMAG, SELFMAG) == 0 &&
+                ehdr.e_type == ET_DYN;
+  fclose(fptr);
+
+  return is_pie;
+}
+
+// Non-PIE launchers keep the historical zero base; PIE needs its load bias.
+static bool relocate_main_image(pid_t pid,
+                                image_base_t<T_VA, elf_wrapper> &main_im) {
+  T_VA image_base = 0;
+
+  if (is_position_independent_executable(main_im.get_path())) {
+    image_base = get_exec_base_from_procfs(pid, main_im.get_path(),
+                                           main_im.get_base_image_name());
+    if (image_base == T_UNINIT_HEX) return false;
+  }
+
+  main_im.set_image_base_address(image_base);
+  main_im.compute_reloc();
+
+  return true;
+}
+
 //!  File scope  get_auxv
 /*!  get_auxv
 
@@ -1044,10 +1125,23 @@ bool linux_launchmon_t::handle_mpir_variables(
     //
     // registering p.launch_hidden_bp
     //
-    const symbol_base_t<T_VA> &launch_bp_sym =
+    const symbol_base_t<T_VA> &mpir_launch_bp_sym =
         image.get_a_symbol(p.get_launch_breakpoint_sym());
+    bool have_launch_bp =
+        !(!mpir_launch_bp_sym) && mpir_launch_bp_sym.is_defined();
+    T_VA launch_bp_addr =
+        have_launch_bp ? mpir_launch_bp_sym.get_relocated_address()
+                       : T_UNINIT_HEX;
+    if (p.rmgr()->get_resource_manager().get_rm() == RC_slurm) {
+      const symbol_base_t<T_VA> &slurm_signal_sym =
+          image.get_a_symbol("launch_g_step_wait");
+      if (!(!slurm_signal_sym) && slurm_signal_sym.is_defined()) {
+        have_launch_bp = true;
+        launch_bp_addr = slurm_signal_sym.get_relocated_address();
+      }
+    }
 
-    if (!(!launch_bp_sym) && launch_bp_sym.is_defined()) {
+    if (have_launch_bp) {
       if (p.get_launch_hidden_bp()) {
         if (p.get_launch_hidden_bp()->is_enabled()) {
           //
@@ -1060,7 +1154,7 @@ bool linux_launchmon_t::handle_mpir_variables(
         p.set_launch_hidden_bp(NULL);
       }
       la_bp = new linux_breakpoint_t();
-      la_bp->set_address_at(launch_bp_sym.get_relocated_address());
+      la_bp->set_address_at(launch_bp_addr);
 
 #if PPC_ARCHITECTURE
       //
@@ -1623,8 +1717,12 @@ launchmon_rc_e linux_launchmon_t::handle_trap_after_attach_event(
       return LAUNCHMON_FAILED;
     }
 
-    main_im->set_image_base_address(0);
-    main_im->compute_reloc();
+    if (!relocate_main_image(p.get_pid(true), *main_im)) {
+      self_trace_t::trace(LEVELCHK(level1), MODULENAME, 1,
+                          "can't resolve the base address of the main image.");
+
+      return LAUNCHMON_FAILED;
+    }
 
     //
     // handle_mpir_variables method requires main image has been relocated
@@ -1818,8 +1916,12 @@ launchmon_rc_e linux_launchmon_t::handle_trap_after_exec_event(
       return LAUNCHMON_FAILED;
     }
 
-    main_im->set_image_base_address(0);
-    main_im->compute_reloc();
+    if (!relocate_main_image(p.get_pid(true), *main_im)) {
+      self_trace_t::trace(LEVELCHK(level1), MODULENAME, 1,
+                          "can't resolve the base address of the main image.");
+
+      return LAUNCHMON_FAILED;
+    }
 
     //
     // handle_mpir_variables method requires main image has been relocated
@@ -2499,8 +2601,13 @@ launchmon_rc_e linux_launchmon_t::handle_newproc_forked_event(
     // forked process, following process control actions will
     // only affect the new process
     //
-    disable_all_BPs(p, use_cxt, false);
-    get_tracer()->tracer_detach(p, use_cxt);
+    // Slurm can hit the MPIR launch hook in a forked srun helper.
+    if (p.rmgr()->get_resource_manager().get_rm() == RC_slurm) {
+      get_tracer()->tracer_continue(p, use_cxt);
+    } else {
+      disable_all_BPs(p, use_cxt, false);
+      get_tracer()->tracer_detach(p, use_cxt);
+    }
 
     {
       self_trace_t::trace(LEVELCHK(level2), MODULENAME, 0,
