@@ -162,6 +162,56 @@ static void cobo_warn(char *fmt, ...)
     fprintf(stderr, "\n");
 }
 
+static int cobo_addr_is_loopback(struct in_addr addr)
+{
+    return ((ntohl(addr.s_addr) >> 24) == 127);
+}
+
+static int cobo_addr_is_linklocal(struct in_addr addr)
+{
+    return ((ntohl(addr.s_addr) & 0xffff0000U) == 0xa9fe0000U);
+}
+
+static int cobo_resolve_hostname(char* hostname, struct in_addr* saddr)
+{
+    struct hostent* he = gethostbyname(hostname);
+    if (!he) {
+       /* gethostbyname doesn't know how to resolve hostname, trying inet_addr */
+       saddr->s_addr = inet_addr(hostname);
+       if (saddr->s_addr == (in_addr_t)-1) {
+           cobo_error("Hostname lookup failed (gethostbyname(%s) %s h_errno=%d) @ file %s:%d",
+                hostname, hstrerror(h_errno), h_errno, __FILE__, __LINE__
+           );
+           return -1;
+       }
+       return 0;
+    }
+
+    struct in_addr fallback;
+    int have_fallback = 0;
+    int i;
+    for (i = 0; he->h_addr_list[i] != NULL; i++) {
+        struct in_addr candidate = *((struct in_addr *) he->h_addr_list[i]);
+        if (!have_fallback) {
+            fallback = candidate;
+            have_fallback = 1;
+        }
+        if (!cobo_addr_is_loopback(candidate) && !cobo_addr_is_linklocal(candidate)) {
+            *saddr = candidate;
+            return 0;
+        }
+    }
+
+    if (have_fallback) {
+        *saddr = fallback;
+        return 0;
+    }
+
+    cobo_error("Hostname lookup returned no IPv4 addresses for %s @ file %s:%d",
+               hostname, __FILE__, __LINE__);
+    return -1;
+}
+
 /* print message to stderr */
 static void cobo_debug(int level, char *fmt, ...)
 {
@@ -503,20 +553,8 @@ static int cobo_connect_hostname(char* hostname, int rank)
     int s = -1;
     struct in_addr saddr;
 
-    /* lookup host address by name */
-    struct hostent* he = gethostbyname(hostname);
-    if (!he) {
-       /* gethostbyname doesn't know how to resolve hostname, trying inet_addr */
-       saddr.s_addr = inet_addr(hostname);
-       if (saddr.s_addr == -1) {
-           cobo_error("Hostname lookup failed (gethostbyname(%s) %s h_errno=%d) @ file %s:%d",
-                hostname, hstrerror(h_errno), h_errno, __FILE__, __LINE__
-           );
-           return s;
-       }
-    }
-    else {
-      saddr = *((struct in_addr *) (*he->h_addr_list));
+    if (cobo_resolve_hostname(hostname, &saddr) != 0) {
+       return s;
     }
 
     /* Loop until we make a connection or until our timeout expires. */
@@ -542,12 +580,14 @@ static int cobo_connect_hostname(char* hostname, int rank)
                 cobo_debug(1, "Connected to rank %d port %d on %s", rank, port, hostname);
                 int test_failed = 0;
                 int result = handshake_client(s, &cobo_sec_protocol, cobo_sessionid);
+                /* A connected port can be stale or foreign; reject it and keep scanning. */
                 switch (result) {
                    case HSHAKE_SUCCESS:
                       break;
                    case HSHAKE_INTERNAL_ERROR:
                       cobo_debug(1, "Error handshaking with server: %s\n", handshake_last_error_str());
-                      abort();
+                      test_failed = 1;
+                      break;
                    case HSHAKE_DROP_CONNECTION:
                    case HSHAKE_CONNECTION_REFUSED:
                       cobo_debug(1, "Connection refused when handshaking with server: %s\n",
@@ -556,10 +596,12 @@ static int cobo_connect_hostname(char* hostname, int rank)
                       break;
                    case HSHAKE_ABORT:
                       handshake_log_sec_error("LaunchMON security error in handshake: ");
-                      abort();
+                      test_failed = 1;
+                      break;
                    default:
                       cobo_debug(1, "Unknown return from handshake client %d\n", result);
-                      abort();
+                      test_failed = 1;
+                      break;
                 }
                 /* write cobo service id */
                 if (!test_failed && cobo_write_fd_w_suppress(s, &cobo_serviceid, sizeof(cobo_serviceid), 1) < 0) {
@@ -1647,4 +1689,3 @@ int cobo_server_close()
 
     return COBO_SUCCESS;
 }
-
