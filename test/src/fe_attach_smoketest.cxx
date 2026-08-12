@@ -180,9 +180,9 @@ int main(int argc, char *argv[]) {
                                             daemon_opts, NULL, NULL)) !=
         LMON_OK) {
       if (getenv("LMON_INVALIDPID_TEST") != NULL) {
-        if (rc == LMON_ETOUT) {
+        if (rc == LMON_ESUBCOM) {
           fprintf(stdout,
-                  "[LMON FE] PASS: returned the LMON_ETOUT error code\n");
+                  "[LMON FE] PASS: returned the LMON_ESUBCOM error code\n");
 
           if (getenv("LMON_CALLS_AFTER_FAIL_TEST") != NULL) {
             if ((rc = LMON_fe_detach(aSession)) != LMON_OK) {
@@ -198,7 +198,7 @@ int main(int argc, char *argv[]) {
           }  // if LMON_CALLS_AFTER_FAIL_TEST
 
           return EXIT_SUCCESS;
-        }  // LMON_ETOUT returned
+        }  // LMON_ESUBCOM returned
       }    // if LMON_INVALIDPID_TEST
 
       fprintf(stdout, "[LMON FE] FAILED\n");
@@ -209,9 +209,9 @@ int main(int argc, char *argv[]) {
                                             daemon_opts, NULL, NULL)) !=
         LMON_OK) {
       if (getenv("LMON_INVALIDPID_TEST") != NULL) {
-        if (rc == LMON_ETOUT) {
+        if (rc == LMON_ESUBCOM) {
           fprintf(stdout,
-                  "[LMON FE] PASS: returned the LMON_ETOUT error code\n");
+                  "[LMON FE] PASS: returned the LMON_ESUBCOM error code\n");
 
           if (getenv("LMON_CALLS_AFTER_FAIL_TEST") != NULL) {
             if ((rc = LMON_fe_detach(aSession)) != LMON_OK) {
@@ -227,7 +227,7 @@ int main(int argc, char *argv[]) {
           }  // if LMON_CALLS_AFTER_FAIL_TEST
 
           return EXIT_SUCCESS;
-        }  // LMON_ETOUT returned
+        }  // LMON_ESUBCOM returned
       }    // if LMON_INVALIDPID_TEST
       fprintf(stdout, "[LMON FE] FAILED\n");
       return EXIT_FAILURE;
