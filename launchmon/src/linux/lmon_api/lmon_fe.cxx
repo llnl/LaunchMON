@@ -4589,7 +4589,9 @@ extern "C" lmon_rc_e LMON_fe_attachAndSpawnDaemons(
     // spawned event.
     //
     pthread_mutex_lock(&(mydesc->watchdogThr.eventMutex));
-    if (mydesc->spawned != LMON_TRUE) {
+    // Wait while neither daemon spawning nor engine stop-tracing has completed.
+    if ((mydesc->spawned != LMON_TRUE) &&
+        (mydesc->detached != LMON_TRUE)) {
       struct timespec ts;
       char *tout = getenv("LMON_FE_ENGINE_TIMEOUT");
       clock_gettime(CLOCK_REALTIME, &ts);
@@ -4623,10 +4625,10 @@ extern "C" lmon_rc_e LMON_fe_attachAndSpawnDaemons(
     pthread_mutex_unlock(&(mydesc->watchdogThr.eventMutex));
 
     //
-    // Once you are here, the watchdog thread updated the mydesc->spawned flag
+    // The engine either spawned daemons or stopped tracing.
     //
     if (mydesc->spawned != LMON_TRUE) {
-      return LMON_EBUG;
+      return LMON_ESUBCOM;
     }
 
     if ((lrc = LMON_fe_beHandshakeSequence(sessionHandle,

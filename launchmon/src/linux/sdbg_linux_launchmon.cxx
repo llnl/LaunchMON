@@ -1659,7 +1659,14 @@ launchmon_rc_e linux_launchmon_t::handle_attach_event(
     e.report();
     return LAUNCHMON_FAILED;
   } catch (tracer_exception_t e) {
-    e.report();
+    if (e.error_code == SDBG_TRACE_EPERM_ERR) {
+      self_trace_t::trace(
+          true, MODULENAME, true,
+          "Unable to attach to the job launcher: ptrace access was denied. "
+          "Check kernel.yama.ptrace_scope, CAP_SYS_PTRACE, or PR_SET_PTRACER");
+    } else {
+      e.report();
+    }
     return LAUNCHMON_FAILED;
   } catch (machine_exception_t e) {
     e.report();

@@ -284,7 +284,13 @@ driver_error_e driver_base_t<SDBG_DEFAULT_TEMPLPARAM>::drive_engine(
     //
     // Attach case needs one more launchmon handler call
     //
-    if (opt->get_my_opt()->attach) lmon->handle_attach_event((*launcher_proc));
+    // A failed attach cannot be monitored; notify the FE and stop the driver.
+    if (opt->get_my_opt()->attach &&
+        lmon->handle_attach_event((*launcher_proc)) != LAUNCHMON_OK) {
+      lmon->say_fetofe_msg(lmonp_stop_tracing);
+      delete launcher_proc;
+      return SDBG_DRIVER_FAILED;
+    }
 
     //
     // event manager begin monitoring events coming from launcher_proc
