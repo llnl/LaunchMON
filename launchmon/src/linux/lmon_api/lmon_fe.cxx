@@ -142,6 +142,7 @@
 #endif
 
 #include <arpa/inet.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
 #include <netdb.h>
@@ -151,6 +152,7 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 #include <cstdio>
@@ -2407,6 +2409,91 @@ static int LMON_handle_rminfo_event(int readingFd, lmon_session_desc_t *mydesc,
   return (i < mydesc->rm_info.num_supported_types) ? 0 : -1;
 }
 
+// Shared only until the parent gives the wait thread the child's PID.
+struct lmon_child_wait_t {
+  pthread_mutex_t pid_mutex;
+  pid_t child_pid;
+};
+
+
+// Collect the exit status of the SSH/engine child started by the frontend.
+// The parent creates this detached thread before fork() and holds pid_mutex
+// until it has written the fork result. Once the thread reads that PID, it
+// destroys and frees the shared state, then waits for that specific child.
+// A negative PID means fork() failed, so there is no child to collect.
+static void *LMON_wait_for_child(void *arg) {
+  lmon_child_wait_t *state = static_cast<lmon_child_wait_t *>(arg);
+
+  pthread_mutex_lock(&state->pid_mutex);
+  const pid_t child_pid = state->child_pid;
+  pthread_mutex_unlock(&state->pid_mutex);
+  pthread_mutex_destroy(&state->pid_mutex);
+  free(state);
+
+  // A negative PID means fork failed. Wait only for the child we started.
+  if (child_pid > 0) {
+    while (waitpid(child_pid, NULL, 0) < 0 && errno == EINTR) {
+    }
+  }
+  return NULL;
+}
+
+static pid_t LMON_fork_with_child_wait() {
+  lmon_child_wait_t *state =
+      static_cast<lmon_child_wait_t *>(malloc(sizeof(lmon_child_wait_t)));
+  if (state == NULL) {
+    errno = ENOMEM;
+    return -1;
+  }
+
+  int error = pthread_mutex_init(&state->pid_mutex, NULL);
+  if (error != 0) {
+    free(state);
+    errno = error;
+    return -1;
+  }
+
+  pthread_attr_t attributes;
+  error = pthread_attr_init(&attributes);
+  if (error == 0) {
+    error = pthread_attr_setdetachstate(&attributes, PTHREAD_CREATE_DETACHED);
+    if (error == 0) {
+      // The thread must exist before fork, but cannot read the PID yet.
+      pthread_mutex_lock(&state->pid_mutex);
+      pthread_t wait_thread;
+      error = pthread_create(&wait_thread, &attributes,
+                             LMON_wait_for_child, state);
+      if (error != 0) {
+        pthread_mutex_unlock(&state->pid_mutex);
+      }
+    }
+    pthread_attr_destroy(&attributes);
+  }
+
+  if (error != 0) {
+    // No child has been started, so the caller can safely return.
+    pthread_mutex_destroy(&state->pid_mutex);
+    free(state);
+    errno = error;
+    return -1;
+  }
+
+  const pid_t child_pid = fork();
+  if (child_pid == 0) {
+    // Continue through the caller's existing SSH/engine exec path.
+    return 0;
+  }
+
+  // The wait thread now owns state. Preserve errno if fork failed.
+  const int fork_error = errno;
+  state->child_pid = child_pid;
+  pthread_mutex_unlock(&state->pid_mutex);
+  if (child_pid < 0) {
+    errno = fork_error;
+  }
+  return child_pid;
+}
+
 static void LMON_child_fork_handler(void) {
   int i;
   lmon_session_desc_t *mydesc;
@@ -4363,7 +4450,13 @@ extern "C" lmon_rc_e LMON_fe_launchAndSpawnDaemons(
     return LMON_EBDARG;
   }
 
-  if ((remote_login_pid = fork()) != 0) {
+  remote_login_pid = LMON_fork_with_child_wait();
+  if (remote_login_pid < 0) {
+    LMON_say_msg(LMON_FE_MSG_PREFIX, true, "failed to spawn LaunchMON engine: %s",
+                 strerror(errno));
+    return LMON_ESYS;
+  }
+  if (remote_login_pid != 0) {
     //
     // A separate process got spawned, which will either directly
     // execute the launchmon engine or perform a login to the given
@@ -4555,7 +4648,13 @@ extern "C" lmon_rc_e LMON_fe_attachAndSpawnDaemons(
     return LMON_EBDARG;
   }
 
-  if ((remote_login_pid = fork()) != 0) {
+  remote_login_pid = LMON_fork_with_child_wait();
+  if (remote_login_pid < 0) {
+    LMON_say_msg(LMON_FE_MSG_PREFIX, true, "failed to spawn LaunchMON engine: %s",
+                 strerror(errno));
+    return LMON_ESYS;
+  }
+  if (remote_login_pid != 0) {
     //
     // A separate process got spawned, which will perform
     // the meat of the launchmon operations on the parallel
