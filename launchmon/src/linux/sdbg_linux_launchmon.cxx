@@ -128,6 +128,7 @@ extern "C" {
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <thread_db.h>
+#include <unistd.h>
 }
 
 #include "sdbg_base_mach.hxx"
@@ -1660,10 +1661,20 @@ launchmon_rc_e linux_launchmon_t::handle_attach_event(
     return LAUNCHMON_FAILED;
   } catch (tracer_exception_t e) {
     if (e.error_code == SDBG_TRACE_EPERM_ERR) {
+      const pid_t launcher_pid = p.get_pid(false);
+      char hostname[HOST_NAME_MAX + 1] = {};
+      const char *host = gethostname(hostname, sizeof(hostname)) == 0
+                             ? hostname
+                             : "unknown";
+
+      // The attach setup has already resolved /proc/<pid>/exe into this image.
+      const std::string &executable = p.get_myimage()->get_path();
       self_trace_t::trace(
           true, MODULENAME, true,
-          "Unable to attach to the job launcher: ptrace access was denied. "
-          "Check kernel.yama.ptrace_scope, CAP_SYS_PTRACE, or PR_SET_PTRACER");
+          "Unable to attach to job launcher host=%s pid=%ld exe=%s: "
+          "ptrace access was denied. "
+          "Check kernel.yama.ptrace_scope, CAP_SYS_PTRACE, or PR_SET_PTRACER",
+          host, static_cast<long>(launcher_pid), executable.c_str());
     } else {
       e.report();
     }
