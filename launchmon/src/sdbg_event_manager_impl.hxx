@@ -79,6 +79,10 @@ extern "C" {
 #include "sdbg_base_mach_impl.hxx"
 #include "sdbg_event_manager.hxx"
 
+#include <cstdio>
+#include <limits.h>
+#include <unistd.h>
+
 ////////////////////////////////////////////////////////////////////
 //
 // PUBLIC INTERFACES: monitor_proc_thread_t
@@ -203,7 +207,19 @@ bool event_manager_t<SDBG_DEFAULT_TEMPLPARAM>::poll_processes(
   launchmon_event_e ev;
 
   if (ev_monitor->wait_for_all(event)) {
-    if (event.get_en() == EV_ENTITY_PROCESS) {
+    eventing_entity_e entity = EV_ENTITY_PROCESS;
+    if (event.get_id() != p.get_pid(false)) {
+      // Both waitpid calls can return ptraced processes or threads. Classify
+      // by thread-group membership, not by which waitpid call returned.
+      char task_path[PATH_MAX];
+      snprintf(task_path, sizeof(task_path), "/proc/%d/task/%d",
+               p.get_pid(false), event.get_id());
+      if (p.get_thrlist().find(event.get_id()) != p.get_thrlist().end() ||
+          access(task_path, F_OK) == 0) {
+        entity = EV_ENTITY_THREAD;
+      }
+    }
+    if (entity == EV_ENTITY_PROCESS) {
       //
       // A process event is reported
       //
@@ -241,7 +257,7 @@ bool event_manager_t<SDBG_DEFAULT_TEMPLPARAM>::poll_processes(
           p.check_and_undo_context(event.get_id());
         }
       }
-    } else if (event.get_en() == EV_ENTITY_THREAD) {
+    } else if (entity == EV_ENTITY_THREAD) {
       //
       // A thread of the target RM_process reported
       //
