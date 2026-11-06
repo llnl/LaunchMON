@@ -1577,10 +1577,10 @@ launchmon_event_e linux_launchmon_t::decipher_an_event(
         // should be invoked.
         //
         return_ev = LM_STOP_FOR_KILL;
-      } else if (p.get_launch_hidden_bp() &&
+      } else if (event.get_signum() == SIGTRAP && p.get_launch_hidden_bp() &&
                  (p.get_launch_hidden_bp()->is_pc_part_of_bp_op(pc))) {
         return_ev = LM_STOP_AT_LAUNCH_BP;
-      } else if (p.get_loader_hidden_bp() &&
+      } else if (event.get_signum() == SIGTRAP && p.get_loader_hidden_bp() &&
                  (p.get_loader_hidden_bp()->is_pc_part_of_bp_op(pc))) {
         return_ev = LM_STOP_AT_LOADER_BP;
       } else if (event.get_signum() == SIGTRAP) {
