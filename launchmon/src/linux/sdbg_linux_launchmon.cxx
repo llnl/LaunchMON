@@ -238,6 +238,10 @@ static T_VA get_exec_base_from_procfs(pid_t pid, const std::string &image_path,
   char aline[MAX_STRING_SIZE];
   T_VA ret_pc = T_UNINIT_HEX;
 
+  // procfs records the executed file's path even when launched through a symlink.
+  std::string executable_path;
+  LMON_get_execpath(pid, executable_path);
+
   sprintf(mapfile, "/proc/%d/maps", pid);
 
   if ((fptr = fopen(mapfile, "r")) == NULL) return ret_pc;
@@ -252,7 +256,8 @@ static T_VA get_exec_base_from_procfs(pid_t pid, const std::string &image_path,
                         &start, &offset, mapped_path);
     if (fields != 3) continue;
 
-    bool path_matches = (image_path == mapped_path);
+    bool path_matches =
+        (executable_path == mapped_path || image_path == mapped_path);
     if (!path_matches) {
       char mapped_copy[PATH_MAX];
       strncpy(mapped_copy, mapped_path, PATH_MAX);

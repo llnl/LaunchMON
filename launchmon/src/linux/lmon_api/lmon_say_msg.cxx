@@ -122,7 +122,8 @@ int LMON_get_execpath(int pid, std::string &opath) {
   int cnt;
 
   sprintf(path, "/proc/%d/exe", pid);
-  cnt = readlink(path, tar, PATH_MAX);
+  cnt = readlink(path, tar, sizeof(tar));
+  if (cnt >= static_cast<int>(sizeof(tar))) return -1;
   if (cnt >= 0) {
     tar[cnt] = '\0';
     cnt++;
